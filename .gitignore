@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments and editor state
+.venv/
+.env
+.env.*
+.vscode/
+
+# Build and package artifacts
+build/
+dist/
+*.egg-info/
+
+# Generated run artifacts
+results/
+logs/**
+!logs/
+!logs/**/
+!logs/**/.gitkeep
+
+# Local project notes
+docs/
+
+# OS noise
+.DS_Store
+Thumbs.db
