@@ -1,0 +1,4 @@
+display:
+  default_steps: 5000
+  output_dir: results/figures
+  manual_flight_output_name: manual_flight.png

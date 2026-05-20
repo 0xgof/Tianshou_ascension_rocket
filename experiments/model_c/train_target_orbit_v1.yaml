@@ -1,0 +1,32 @@
+settings:
+  reward:
+    selected_reward: target_orbit_v1
+
+training:
+  model_name: model_c
+  run_name: model_c_train_target_orbit_v1
+  max_epoch: 20
+  max_steps: 400
+  step_per_epoch: 2048
+  step_per_collect: 256
+  batch_size: 128
+  repeat_per_collect: 4
+  learning_rate: 0.0003
+
+  actor_network:
+    hidden_sizes: [64, 64]
+    activation: tanh
+
+  critic_network:
+    hidden_sizes: [64, 64]
+    activation: tanh
+
+  gaussian_policy:
+    initial_log_std: 0.0
+
+  training_display:
+    enabled: false
+    step_delay_seconds: 0.05
+    width: 1100
+    height: 820
+    fps: 30

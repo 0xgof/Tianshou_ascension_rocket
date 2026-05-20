@@ -1,0 +1,55 @@
+physics:
+  planet_radius: 6371000.0
+  mu: 398600441800000.0
+  g0: 9.80665
+  rho0: 1.225
+  sea_level_pressure: 101325.0
+  scale_height: 8500.0
+  max_thrust: 7800000.0
+  max_fuel_burn_rate: 2350.0
+  sea_level_relative_efficiency: 1.0
+  vacuum_relative_efficiency: 0.88
+  max_thrust_angle: 3.141592653589793
+  drag_coefficient: 0.5
+  reference_area: 10.0
+  dt: 1.0
+  enable_atmosphere: true
+  enable_drag: true
+  min_radius: 1.0
+environment:
+  dry_mass: 110000.0
+  payload_mass: 15000.0
+  initial_fuel: 550000.0
+  initial_altitude: 0.0
+  target_altitude: 200000.0
+  max_steps: 1000
+  altitude_tolerance: 500.0
+  vertical_speed_tolerance: 50.0
+  tangential_velocity_tolerance: 100.0
+  throttle_change_per_second: 0.5
+  angle_change_per_second: 5.0
+  terminate_on_fuel_empty: false
+reward:
+  selected_reward: altitude_gain_v1
+display:
+  default_steps: 300
+  width: 1100
+  height: 820
+  fps: 30
+  manual_simulation_rate_hz: 5.0
+  figure_width: 10.0
+  figure_height: 6.0
+  output_dir: results/figures
+  manual_flight_output_name: manual_flight.png
+  random_output_name: random_rollout.png
+  scripted_output_name: scripted_rollout.png
+  overview_size_m: 200000.0
+  zoom_size_m: 300.0
+  rocket_height_m: 50.0
+  karman_line_m: 100000.0
+  manual_control_throttle_step: 0.01
+  manual_control_angle_step: 1.0
+learning:
+  observation_scaling:
+    reference_initial_fuel: 600000.0
+    reference_target_altitude: 200000.0

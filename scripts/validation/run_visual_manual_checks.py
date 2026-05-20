@@ -1,0 +1,224 @@
+import argparse
+import sys
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from rocket_env.env import RocketAscentEnv
+from rocket_env.manual_control import ManualControlState
+from rocket_env.physics import RocketState, drag_acceleration
+from rocket_env.plots import plot_trajectory
+from rocket_env.rollouts import (
+    no_thrust_policy,
+    prograde_thrust_policy,
+    radial_thrust_policy,
+    run_episode,
+)
+from settings import load_settings
+
+
+def run_and_plot(name, policy, output_dir, env_config, steps=120):
+    env = RocketAscentEnv(replace(env_config, max_steps=steps))
+    trace, info = run_episode(env, policy, max_steps=steps)
+    plot_path = output_dir / f"{name}.png"
+    plot_trajectory(trace, env, title=name.replace("_", " "), output_path=str(plot_path))
+    return {
+        "name": name,
+        "steps": len(trace),
+        "plot": str(plot_path),
+        "altitude": info.get("altitude"),
+        "speed": info.get("speed"),
+        "fuel_remaining": info.get("fuel_remaining"),
+        "crashed": info.get("crashed"),
+        "success": info.get("success"),
+        "truncated": bool(trace[-1]["truncated"]) if trace else False,
+    }
+
+
+def crash_case(output_dir, env_config):
+    env = RocketAscentEnv(replace(env_config, max_steps=10))
+    obs, _info = env.reset(seed=0)
+    env.force_state(
+        RocketState(
+            position=np.array([env.config.physics.planet_radius - 1.0, 0.0]),
+            velocity=np.array([-1.0, 0.0]),
+            dry_mass=env.config.dry_mass,
+            payload_mass=env.config.payload_mass,
+            remaining_fuel=env.config.initial_fuel,
+            time=0.0,
+        )
+    )
+    action = no_thrust_policy(obs, {}, 0)
+    obs, reward, terminated, truncated, info = env.step(action)
+    trace = [
+        {
+            "observation": obs,
+            "action": action.copy(),
+            "reward": float(reward),
+            "terminated": terminated,
+            "truncated": truncated,
+            "info": dict(info),
+        }
+    ]
+    plot_path = output_dir / "crash_case.png"
+    plot_trajectory(trace, env, title="crash case", output_path=str(plot_path))
+    return {
+        "name": "crash_case",
+        "steps": len(trace),
+        "plot": str(plot_path),
+        "altitude": info.get("altitude"),
+        "speed": info.get("speed"),
+        "fuel_remaining": info.get("fuel_remaining"),
+        "crashed": info.get("crashed"),
+        "success": info.get("success"),
+        "truncated": bool(trace[-1]["truncated"]) if trace else False,
+    }
+
+
+def time_limit_case(output_dir, env_config):
+    env = RocketAscentEnv(replace(env_config, max_steps=1))
+    trace, info = run_episode(env, radial_thrust_policy, max_steps=2)
+    plot_path = output_dir / "time_limit_case.png"
+    plot_trajectory(trace, env, title="time limit case", output_path=str(plot_path))
+    return {
+        "name": "time_limit_case",
+        "steps": len(trace),
+        "plot": str(plot_path),
+        "altitude": info.get("altitude"),
+        "speed": info.get("speed"),
+        "fuel_remaining": info.get("fuel_remaining"),
+        "crashed": info.get("crashed"),
+        "success": info.get("success"),
+        "truncated": bool(trace[-1]["truncated"]) if trace else False,
+    }
+
+
+def atmosphere_probe(config):
+    velocity = np.array([1_000.0, 0.0])
+    sea_drag = np.linalg.norm(drag_acceleration(velocity, 10_000.0, config.rho0, config))
+    high_density = config.rho0 * np.exp(-50_000.0 / config.scale_height)
+    high_drag = np.linalg.norm(drag_acceleration(velocity, 10_000.0, high_density, config))
+    return {
+        "name": "atmosphere_probe",
+        "sea_level_drag": float(sea_drag),
+        "fifty_km_drag": float(high_drag),
+        "passes": bool(sea_drag > high_drag),
+    }
+
+
+def manual_control_probe(env_config, display_settings):
+    env = RocketAscentEnv(replace(env_config, max_steps=5))
+    control = ManualControlState(
+        throttle_step=display_settings.manual_control_throttle_step,
+        angle_step=display_settings.manual_control_angle_step,
+    )
+    control.apply_key("up")
+    control.apply_key("right")
+    action = control.action()
+    env.reset(seed=0)
+    _obs, _reward, _terminated, _truncated, info = env.step(action)
+    return {
+        "name": "manual_control_probe",
+        "action": [float(action[0]), float(action[1])],
+        "fuel_used_ratio": info["fuel_used_ratio"],
+        "fuel_used_mass": info["fuel_used_mass"],
+        "passes": bool(info["fuel_used_ratio"] > 0.0 and action[1] > 0.0),
+    }
+
+
+def write_report(output_dir, scenario_results, atmosphere_result, manual_result):
+    report = output_dir / "visual_manual_check_report.md"
+    lines = [
+        "# Visual Manual Check Report",
+        "",
+        "This report is generated by `scripts/run_visual_manual_checks.py`.",
+        "It records automated visual-check artifacts. Live keyboard inspection still requires a human run of `scripts/manual_fly.py`.",
+        "",
+        "## Scenario Results",
+        "",
+    ]
+    for result in scenario_results:
+        lines.extend(
+            [
+                f"### {result['name']}",
+                "",
+                f"- steps: {result['steps']}",
+                f"- altitude: {result['altitude']}",
+                f"- speed: {result['speed']}",
+                f"- fuel remaining: {result['fuel_remaining']}",
+                f"- crashed: {result['crashed']}",
+                f"- success: {result['success']}",
+                f"- truncated: {result['truncated']}",
+                f"- plot: `{result['plot']}`",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Atmosphere Probe",
+            "",
+            f"- sea level drag: {atmosphere_result['sea_level_drag']}",
+            f"- 50 km drag: {atmosphere_result['fifty_km_drag']}",
+            f"- passes: {atmosphere_result['passes']}",
+            "",
+            "## Manual Control Probe",
+            "",
+            f"- action: {manual_result['action']}",
+            f"- fuel used ratio: {manual_result['fuel_used_ratio']}",
+            f"- fuel used mass: {manual_result['fuel_used_mass']}",
+            f"- passes: {manual_result['passes']}",
+            "",
+            "## Remaining Manual Acceptance",
+            "",
+            "- Run `scripts/manual_fly.py` in an interactive desktop session.",
+            "- Confirm keyboard throttle and thrust-angle response visually.",
+            "- Confirm thrust vector direction responds to keyboard input.",
+            "- Confirm crash state is visibly reported.",
+        ]
+    )
+    report.write_text("\n".join(lines), encoding="utf-8")
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config")
+    parser.add_argument("--output-dir", default="results/visual_manual_checks")
+    args = parser.parse_args()
+
+    settings = load_settings(args.config)
+    env_config = settings.to_env_config()
+    physics_config = settings.to_physics_config()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    results = [
+        run_and_plot("no_thrust", no_thrust_policy, output_dir, env_config, steps=20),
+        run_and_plot(
+            "radial_thrust",
+            radial_thrust_policy,
+            output_dir,
+            env_config,
+            steps=120,
+        ),
+        run_and_plot(
+            "prograde_thrust",
+            prograde_thrust_policy,
+            output_dir,
+            env_config,
+            steps=120,
+        ),
+        crash_case(output_dir, env_config),
+        time_limit_case(output_dir, env_config),
+    ]
+    atmosphere = atmosphere_probe(physics_config)
+    manual = manual_control_probe(env_config, settings.display)
+    report = write_report(output_dir, results, atmosphere, manual)
+    print("report:", report)
+
+
+if __name__ == "__main__":
+    main()

@@ -21,7 +21,10 @@ dist/
 *.egg-info/
 
 # Generated run artifacts
-results/
+results/**
+!results/
+!results/**/
+!results/**/.gitkeep
 logs/**
 !logs/
 !logs/**/
