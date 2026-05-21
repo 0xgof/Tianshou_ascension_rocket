@@ -52,12 +52,23 @@ def altitude_gain_reward_v1(info: dict[str, object]) -> RewardResult:
 def target_orbit_reward_v1(info: dict[str, object]) -> RewardResult:
     """Reward matching the designed orbit altitude and tangential velocity."""
 
-    target_altitude_std = 0.5
-    target_tangential_velocity_std = 0.5
-    fuel_penalty_curve = 3.0
+    target_altitude_below_std = 0.55
+    target_altitude_above_std = 0.25
+    target_tangential_velocity_below_std = 0.35
+    target_tangential_velocity_above_std = 0.60
+    target_tangential_velocity_tail_exponent = 2.5
+    precision_orbit_std = 0.10
+    precision_orbit_bonus_scale = 2.0
+    altitude_overshoot_limit_ratio = 1.02
+    altitude_overshoot_penalty_scale = 2.0
+    altitude_overshoot_penalty_cap = 0.5
+    tangential_velocity_overspeed_limit_ratio = 1.02
+    tangential_velocity_overspeed_penalty_scale = 2.0
+    tangential_velocity_overspeed_penalty_cap = 0.5
+    fuel_penalty_curve = 1.0
     inactivity_altitude_m = 1.0
     inactivity_throttle_threshold = 0.01
-    inactivity_penalty_value = -0.01
+    inactivity_penalty_value = 0.0
     crash_penalty_value = -0.5
 
     altitude_ratio = _safe_ratio(info["altitude"],
@@ -67,12 +78,38 @@ def target_orbit_reward_v1(info: dict[str, object]) -> RewardResult:
     applied_throttle = _applied_throttle(info)
 
     # Bonus
-    target_altitude_bonus = _gaussian_target_reward(altitude_ratio,
-                                                    target_altitude_std)
-    tangential_velocity_bonus = _gaussian_target_reward(tangential_velocity_ratio,
-                                                        target_tangential_velocity_std)
+    target_altitude_bonus = _asymmetric_gaussian_target_reward(
+        altitude_ratio,
+        target_altitude_below_std,
+        target_altitude_above_std,
+    )
+    tangential_velocity_bonus = _tail_compressed_asymmetric_gaussian_target_reward(
+        tangential_velocity_ratio,
+        target_tangential_velocity_below_std,
+        target_tangential_velocity_above_std,
+        target_tangential_velocity_tail_exponent,
+    )
+    precision_altitude_match = _gaussian_target_reward(altitude_ratio,
+                                                       precision_orbit_std)
+    precision_velocity_match = _gaussian_target_reward(tangential_velocity_ratio,
+                                                       precision_orbit_std)
+    precision_orbit_bonus = (precision_orbit_bonus_scale
+                             * precision_altitude_match
+                             * precision_velocity_match)
 
     # Penalties
+    altitude_overshoot_penalty = _upper_overshoot_penalty(
+        altitude_ratio,
+        altitude_overshoot_limit_ratio,
+        altitude_overshoot_penalty_scale,
+        altitude_overshoot_penalty_cap,
+    )
+    tangential_velocity_overspeed_penalty = _upper_overshoot_penalty(
+        tangential_velocity_ratio,
+        tangential_velocity_overspeed_limit_ratio,
+        tangential_velocity_overspeed_penalty_scale,
+        tangential_velocity_overspeed_penalty_cap,
+    )
     fuel_penalty = -_exponential_unit_penalty(float(info["fuel_used_ratio"]),
                                               fuel_penalty_curve)
     inactivity_penalty = (
@@ -85,6 +122,11 @@ def target_orbit_reward_v1(info: dict[str, object]) -> RewardResult:
 
     components = {"target_altitude_bonus": target_altitude_bonus,
                   "tangential_velocity_bonus": tangential_velocity_bonus,
+                  "precision_orbit_bonus": precision_orbit_bonus,
+                  "altitude_overshoot_penalty": altitude_overshoot_penalty,
+                  "tangential_velocity_overspeed_penalty": (
+                      tangential_velocity_overspeed_penalty
+                  ),
                   "fuel_penalty": fuel_penalty,
                   "inactivity_penalty": inactivity_penalty,
                   "crash_penalty": crash_penalty}
@@ -187,6 +229,36 @@ def _gaussian_target_reward(ratio: float,
     return reward
 
 
+def _asymmetric_gaussian_target_reward(ratio: float,
+                                       below_target_std: float,
+                                       above_target_std: float) -> float:
+    target_std = below_target_std if ratio <= 1.0 else above_target_std
+    reward = _gaussian_target_reward(ratio, target_std)
+
+    return reward
+
+
+def _tail_compressed_gaussian_target_reward(ratio: float,
+                                            std: float,
+                                            tail_exponent: float) -> float:
+    raw_reward = _gaussian_target_reward(ratio, std)
+    reward = raw_reward ** tail_exponent
+
+    return reward
+
+
+def _tail_compressed_asymmetric_gaussian_target_reward(ratio: float,
+                                                       below_target_std: float,
+                                                       above_target_std: float,
+                                                       tail_exponent: float) -> float:
+    raw_reward = _asymmetric_gaussian_target_reward(ratio,
+                                                   below_target_std,
+                                                   above_target_std)
+    reward = raw_reward ** tail_exponent
+
+    return reward
+
+
 def _raw_gaussian_target_reward(ratio: float,
                                 std: float) -> float:
     normalized_error = (ratio - 1.0) / std
@@ -201,6 +273,23 @@ def _exponential_unit_penalty(value_ratio: float,
     numerator = math.exp(curve * clamped_ratio) - 1.0
     denominator = math.exp(curve) - 1.0
     penalty = numerator / denominator
+
+    return penalty
+
+
+def _upper_overshoot_penalty(value_ratio: float,
+                             limit_ratio: float,
+                             scale: float,
+                             cap: float) -> float:
+    if value_ratio <= 1.0:
+        return 0.0
+
+    if value_ratio >= limit_ratio:
+        return -cap
+
+    overshoot_fraction = (value_ratio - 1.0) / (limit_ratio - 1.0)
+    raw_penalty = scale * cap * overshoot_fraction ** 2
+    penalty = -min(raw_penalty, cap)
 
     return penalty
 

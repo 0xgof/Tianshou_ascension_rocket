@@ -23,12 +23,41 @@ def plot_target_orbit_reward_functions(output_path: str | Path) -> None:
                                                          fuel_ratio=0.0,
                                                          component="target_altitude_bonus")
                                  for ratio in ratio_values])
+    precision_altitude_rewards = np.array([
+        _target_orbit_component(altitude_ratio=ratio,
+                                velocity_ratio=1.0,
+                                fuel_ratio=0.0,
+                                component="precision_orbit_bonus") / 2.0
+        for ratio in ratio_values
+    ])
+    altitude_overshoot_penalties = np.array([
+        _target_orbit_component(altitude_ratio=ratio,
+                                velocity_ratio=1.0,
+                                fuel_ratio=0.0,
+                                component="altitude_overshoot_penalty")
+        for ratio in ratio_values
+    ])
+    altitude_shaping_total = altitude_rewards + altitude_overshoot_penalties
     velocity_rewards = np.array([_target_orbit_component(altitude_ratio=1.0,
                                                          velocity_ratio=ratio,
                                                          fuel_ratio=0.0,
                                                          component="tangential_velocity_bonus")
                                  for ratio in ratio_values])
-    total_match_rewards = altitude_rewards + velocity_rewards
+    velocity_overspeed_penalties = np.array([
+        _target_orbit_component(altitude_ratio=1.0,
+                                velocity_ratio=ratio,
+                                fuel_ratio=0.0,
+                                component="tangential_velocity_overspeed_penalty")
+        for ratio in ratio_values
+    ])
+    precision_velocity_rewards = np.array([
+        _target_orbit_component(altitude_ratio=1.0,
+                                velocity_ratio=ratio,
+                                fuel_ratio=0.0,
+                                component="precision_orbit_bonus") / 2.0
+        for ratio in ratio_values
+    ])
+    velocity_shaping_total = velocity_rewards + velocity_overspeed_penalties
     fuel_penalties = np.array([_target_orbit_component(altitude_ratio=1.0,
                                                        velocity_ratio=1.0,
                                                        fuel_ratio=fuel_ratio,
@@ -48,7 +77,7 @@ def plot_target_orbit_reward_functions(output_path: str | Path) -> None:
 
     fig, axes = plt.subplots(nrows=2,
                              ncols=2,
-                             figsize=(12, 8))
+                             figsize=(14, 8))
     altitude_axis = axes[0, 0]
     velocity_axis = axes[0, 1]
     fuel_axis = axes[1, 0]
@@ -59,17 +88,40 @@ def plot_target_orbit_reward_functions(output_path: str | Path) -> None:
                        color="#1f77b4",
                        linewidth=2.0,
                        label="altitude target reward")
+    altitude_axis.plot(ratio_values,
+                       precision_altitude_rewards,
+                       color="#d62728",
+                       linestyle="--",
+                       linewidth=1.7,
+                       label="narrow altitude match")
+    altitude_axis.plot(ratio_values,
+                       altitude_overshoot_penalties,
+                       color="#9467bd",
+                       linewidth=1.7,
+                       label="altitude overshoot penalty")
+    altitude_axis.plot(ratio_values,
+                       altitude_shaping_total,
+                       color="#17becf",
+                       linestyle=":",
+                       linewidth=2.0,
+                       label="altitude reward + penalty")
     altitude_axis.axvline(1.0,
                           color="#444444",
                           linestyle="--",
                           linewidth=1.0,
                           label="target ratio")
+    altitude_axis.axvline(1.02,
+                          color="#d62728",
+                          linestyle=":",
+                          linewidth=1.0,
+                          label="overshoot limit")
     altitude_axis.set_title("Altitude Match Reward")
     altitude_axis.set_xlabel("altitude / target_altitude")
     altitude_axis.set_ylabel("reward")
-    altitude_axis.set_ylim(-0.05, 1.05)
     altitude_axis.grid(True, alpha=0.25)
-    altitude_axis.legend(loc="upper right")
+    altitude_axis.legend(loc="upper left",
+                         bbox_to_anchor=(1.02, 1.0),
+                         borderaxespad=0.0)
 
     velocity_axis.plot(ratio_values,
                        velocity_rewards,
@@ -77,21 +129,39 @@ def plot_target_orbit_reward_functions(output_path: str | Path) -> None:
                        linewidth=2.0,
                        label="velocity target reward")
     velocity_axis.plot(ratio_values,
-                       total_match_rewards,
-                       color="#2ca02c",
-                       linewidth=1.4,
-                       alpha=0.7,
-                       label="altitude + velocity if ratios match")
+                       velocity_overspeed_penalties,
+                       color="#d62728",
+                       linewidth=1.7,
+                       label="velocity overspeed penalty")
+    velocity_axis.plot(ratio_values,
+                       velocity_shaping_total,
+                       color="#17becf",
+                       linestyle=":",
+                       linewidth=2.0,
+                       label="velocity reward + penalty")
+    velocity_axis.plot(ratio_values,
+                       precision_velocity_rewards,
+                       color="#8c564b",
+                       linestyle="--",
+                       linewidth=1.7,
+                       label="narrow velocity match")
     velocity_axis.axvline(1.0,
                           color="#444444",
                           linestyle="--",
                           linewidth=1.0,
                           label="target ratio")
+    velocity_axis.axvline(1.02,
+                          color="#d62728",
+                          linestyle=":",
+                          linewidth=1.0,
+                          label="overspeed limit")
     velocity_axis.set_title("Tangential Velocity Match Reward")
     velocity_axis.set_xlabel("tangential_velocity / target_orbital_velocity")
     velocity_axis.set_ylabel("reward")
     velocity_axis.grid(True, alpha=0.25)
-    velocity_axis.legend(loc="upper right")
+    velocity_axis.legend(loc="upper left",
+                         bbox_to_anchor=(1.02, 1.0),
+                         borderaxespad=0.0)
 
     fuel_axis.plot(fuel_ratio_values,
                    fuel_penalties,
@@ -107,7 +177,9 @@ def plot_target_orbit_reward_functions(output_path: str | Path) -> None:
     fuel_axis.set_xlabel("fuel_used / initial_fuel")
     fuel_axis.set_ylabel("penalty")
     fuel_axis.grid(True, alpha=0.25)
-    fuel_axis.legend(loc="lower left")
+    fuel_axis.legend(loc="upper left",
+                     bbox_to_anchor=(1.02, 1.0),
+                     borderaxespad=0.0)
 
     event_names = ["inactivity", "crash"]
     event_penalties = [inactivity_penalty, crash_penalty]
@@ -122,7 +194,7 @@ def plot_target_orbit_reward_functions(output_path: str | Path) -> None:
     event_axis.grid(True, axis="y", alpha=0.25)
 
     fig.suptitle("target_orbit_v1 reward and penalty functions")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 0.82, 1.0))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
