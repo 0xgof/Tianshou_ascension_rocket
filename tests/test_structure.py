@@ -11,6 +11,7 @@ REQUIRED_FOLDERS = [
     "src/learning/models/model_a",
     "src/learning/models/model_b",
     "src/learning/models/model_c",
+    "src/learning/models/model_d",
     "src/learning/tianshou",
     "src/settings",
     "configs",
@@ -40,6 +41,7 @@ def test_importable_learning_and_settings_packages_exist():
     assert (ROOT / "src/learning/models/model_a/__init__.py").is_file()
     assert (ROOT / "src/learning/models/model_b/__init__.py").is_file()
     assert (ROOT / "src/learning/models/model_c/__init__.py").is_file()
+    assert (ROOT / "src/learning/models/model_d/__init__.py").is_file()
     assert (ROOT / "src/learning/tianshou/__init__.py").is_file()
     assert (ROOT / "src/settings/__init__.py").is_file()
 
@@ -48,7 +50,7 @@ def test_models_are_self_contained():
     assert not (ROOT / "src/learning/models/mlp.py").exists()
     assert not (ROOT / "src/learning/models/heads.py").exists()
 
-    for model_name in ["model_a", "model_b", "model_c"]:
+    for model_name in ["model_a", "model_b", "model_c", "model_d"]:
         model_root = ROOT / "src/learning/models" / model_name
         assert (model_root / "mlp.py").is_file()
         assert (model_root / "heads.py").is_file()

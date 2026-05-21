@@ -14,11 +14,12 @@ import torch.nn as nn
 from torch.distributions import Independent, Normal
 
 from learning.adapters import DEFAULT_OBSERVATION_SIZE
-from learning.models import model_a, model_b, model_c
+from learning.models import model_a, model_b, model_c, model_d
 from learning.tianshou.diagnostic_plots import plot_training_diagnostics
 from learning.tianshou.envs import make_encoded_env
 from learning.tianshou.episode_monitor import (EpisodeAltitudeRecord,
                                                EpisodeAltitudeRecorder,
+                                               plot_best_episode_trajectory,
                                                plot_episode_altitudes)
 from learning.tianshou.models import GaussianPolicyConfig, NetworkConfig
 from learning.tianshou.training_logger import TrainingDiagnosticsLogger
@@ -31,17 +32,21 @@ from settings import TRAINING_LOG_DIR, write_run_log
 MODEL_A = "model_a"
 MODEL_B = "model_b"
 MODEL_C = "model_c"
-MODEL_NAMES = (MODEL_A, MODEL_B, MODEL_C)
+MODEL_D = "model_d"
+MODEL_NAMES = (MODEL_A, MODEL_B, MODEL_C, MODEL_D)
 
 
 @dataclass(frozen=True)
 class TrainingArtifacts:
     metrics_path: str
     checkpoint_path: str
+    checkpoint_dir: str
     settings_path: str
     log_path: str
     episode_altitudes_path: str | None = None
+    best_episode_trace_path: str | None = None
     altitude_plot_path: str | None = None
+    best_episode_trajectory_plot_path: str | None = None
     reward_plot_path: str | None = None
     model_metrics_plot_path: str | None = None
     training_diagnostics_path: str | None = None
@@ -75,6 +80,7 @@ class TianshouPPOConfig:
     save_artifacts: bool = True
     output_dir: str = "results"
     run_name: str = "latest"
+    resume_checkpoint_path: str | None = None
     settings_input: dict[str, Any] | None = None
     training_input: dict[str, Any] | None = None
 
@@ -142,11 +148,56 @@ def run_tianshou_ppo_smoke(config: TianshouPPOConfig = TianshouPPOConfig(),
 
     actor_critic = ActorCritic(actor=actor, critic=critic)
     optimizer = torch.optim.Adam(actor_critic.parameters(), lr=config.learning_rate)
+    if config.resume_checkpoint_path is not None:
+        _load_training_checkpoint(config.resume_checkpoint_path,
+                                  actor=actor,
+                                  critic=critic,
+                                  optimizer=optimizer)
+
     policy = build_tianshou_ppo_policy(actor,
                                        critic,
                                        optimizer,
                                        sample_env.action_space,
                                        config)
+    artifact_run_name = (
+        _timestamped_artifact_name(config.run_name)
+        if config.save_artifacts
+        else None
+    )
+    artifact_paths = (
+        _training_artifact_paths(config, artifact_run_name)
+        if artifact_run_name is not None
+        else None
+    )
+
+    def save_epoch_checkpoint(epoch: int,
+                              env_step: int,
+                              gradient_step: int) -> str:
+        if artifact_run_name is None or artifact_paths is None:
+            return ""
+
+        checkpoint_path = (
+            artifact_paths["checkpoint_dir"] / f"epoch_{epoch:03d}.pt"
+        )
+        _save_training_checkpoint(checkpoint_path=checkpoint_path,
+                                  config=config,
+                                  actor=actor,
+                                  critic=critic,
+                                  optimizer=optimizer,
+                                  artifact_run_name=artifact_run_name,
+                                  settings_path=artifact_paths["settings_path"],
+                                  altitude_plot_path=artifact_paths["altitude_plot_path"],
+                                  best_episode_trajectory_plot_path=artifact_paths["best_episode_trajectory_plot_path"],
+                                  reward_plot_path=None,
+                                  model_metrics_plot_path=artifact_paths["model_metrics_plot_path"],
+                                  training_diagnostics_path=artifact_paths["training_diagnostics_path"],
+                                  metrics={},
+                                  checkpoint_kind="epoch",
+                                  epoch=epoch,
+                                  env_step=env_step,
+                                  gradient_step=gradient_step)
+
+        return str(checkpoint_path)
 
     train_collector = Collector(policy=policy,
                                 env=train_envs,
@@ -168,6 +219,11 @@ def run_tianshou_ppo_smoke(config: TianshouPPOConfig = TianshouPPOConfig(),
                               batch_size=config.batch_size,
                               step_per_collect=config.step_per_collect,
                               train_fn=track_epoch,
+                              save_checkpoint_fn=(
+                                  save_epoch_checkpoint
+                                  if config.save_artifacts
+                                  else None
+                              ),
                               logger=diagnostics_logger)
 
     result = trainer.run()
@@ -181,14 +237,21 @@ def run_tianshou_ppo_smoke(config: TianshouPPOConfig = TianshouPPOConfig(),
                                             actor=actor,
                                             critic=critic,
                                             optimizer=optimizer,
+                                            artifact_run_name=artifact_run_name,
+                                            artifact_paths=artifact_paths,
                                             episode_altitudes=altitude_recorder.records,
+                                            best_episode_record=altitude_recorder.best_orbit_record,
+                                            best_episode_trace=altitude_recorder.best_orbit_trace,
                                             training_diagnostics=diagnostics_logger.payload())
         metrics["metrics_path"] = artifacts.metrics_path
         metrics["checkpoint_path"] = artifacts.checkpoint_path
+        metrics["checkpoint_dir"] = artifacts.checkpoint_dir
         metrics["settings_path"] = artifacts.settings_path
         metrics["log_path"] = artifacts.log_path
         metrics["episode_altitudes_path"] = artifacts.episode_altitudes_path
+        metrics["best_episode_trace_path"] = artifacts.best_episode_trace_path
         metrics["altitude_plot_path"] = artifacts.altitude_plot_path
+        metrics["best_episode_trajectory_plot_path"] = artifacts.best_episode_trajectory_plot_path
         metrics["reward_plot_path"] = artifacts.reward_plot_path
         metrics["model_metrics_plot_path"] = artifacts.model_metrics_plot_path
         metrics["training_diagnostics_path"] = artifacts.training_diagnostics_path
@@ -205,6 +268,8 @@ def build_named_model(config: TianshouPPOConfig) -> tuple[nn.Module, nn.Module]:
         builder = model_b.build_model
     elif config.model_name == MODEL_C:
         builder = model_c.build_model
+    elif config.model_name == MODEL_D:
+        builder = model_d.build_model
     else:
         available = ", ".join(MODEL_NAMES)
         raise ValueError(f"Unknown model '{config.model_name}'. Available: {available}")
@@ -240,35 +305,31 @@ def save_training_artifacts(config: TianshouPPOConfig,
                             actor: nn.Module,
                             critic: nn.Module,
                             optimizer: torch.optim.Optimizer,
+                            artifact_run_name: str | None = None,
+                            artifact_paths: dict[str, Path] | None = None,
                             episode_altitudes: list[EpisodeAltitudeRecord] | None = None,
+                            best_episode_record: EpisodeAltitudeRecord | None = None,
+                            best_episode_trace: list[dict[str, Any]] | None = None,
                             training_diagnostics: dict[str, Any] | None = None
                             ) -> TrainingArtifacts:
     """Save metrics and model state for one training run."""
 
-    run_dir = Path(config.output_dir)
-    metrics_dir = run_dir / "metrics" / config.model_name
-    checkpoint_dir = run_dir / "checkpoints" / config.model_name
-    settings_dir = run_dir / "settings" / config.model_name
-    traces_dir = run_dir / "traces" / config.model_name
-    figures_root_dir = run_dir / "figures" / config.model_name
+    artifact_run_name = artifact_run_name or _timestamped_artifact_name(config.run_name)
+    artifact_paths = artifact_paths or _training_artifact_paths(config,
+                                                                artifact_run_name)
+    _ensure_artifact_dirs(artifact_paths)
 
-    metrics_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    settings_dir.mkdir(parents=True, exist_ok=True)
-    traces_dir.mkdir(parents=True, exist_ok=True)
-
-    artifact_run_name = _timestamped_artifact_name(config.run_name)
-    figures_dir = figures_root_dir / artifact_run_name
-    figures_dir.mkdir(parents=True, exist_ok=True)
-
-    metrics_path = metrics_dir / f"{artifact_run_name}.json"
-    checkpoint_path = checkpoint_dir / f"{artifact_run_name}.pt"
-    settings_path = settings_dir / f"{artifact_run_name}.json"
-    episode_altitudes_path = traces_dir / f"{artifact_run_name}_episode_altitudes.json"
-    training_diagnostics_path = traces_dir / f"{artifact_run_name}_training_diagnostics.json"
-    altitude_plot_path = figures_dir / "episode_altitudes.png"
-    reward_plot_path = figures_dir / "reward_functions.png"
-    model_metrics_plot_path = figures_dir / "model_metrics.png"
+    metrics_path = artifact_paths["metrics_path"]
+    checkpoint_path = artifact_paths["checkpoint_path"]
+    checkpoint_dir = artifact_paths["checkpoint_dir"]
+    settings_path = artifact_paths["settings_path"]
+    episode_altitudes_path = artifact_paths["episode_altitudes_path"]
+    best_episode_trace_path = artifact_paths["best_episode_trace_path"]
+    training_diagnostics_path = artifact_paths["training_diagnostics_path"]
+    altitude_plot_path = artifact_paths["altitude_plot_path"]
+    best_episode_trajectory_plot_path = artifact_paths["best_episode_trajectory_plot_path"]
+    reward_plot_path = artifact_paths["reward_plot_path"]
+    model_metrics_plot_path = artifact_paths["model_metrics_plot_path"]
 
     episode_altitudes = episode_altitudes or []
     episode_altitudes_payload = {"model_name": config.model_name,
@@ -280,6 +341,17 @@ def save_training_artifacts(config: TianshouPPOConfig,
     plot_episode_altitudes(episode_altitudes,
                            altitude_plot_path,
                            title=f"{config.run_name}: max altitude by episode")
+    best_episode_trace_payload = {"model_name": config.model_name,
+                                  "run_name": config.run_name,
+                                  "artifact_run_name": artifact_run_name,
+                                  "best_episode_record": _json_safe(best_episode_record),
+                                  "trace": _json_safe(best_episode_trace or [])}
+    best_episode_trace_path.write_text(json.dumps(best_episode_trace_payload,
+                                                  indent=2),
+                                       encoding="utf-8")
+    plot_best_episode_trajectory(best_episode_trace or [],
+                                 best_episode_trajectory_plot_path,
+                                 title=f"{config.run_name}: best episode trajectory")
     training_diagnostics_payload = {"model_name": config.model_name,
                                     "run_name": config.run_name,
                                     "artifact_run_name": artifact_run_name,
@@ -301,8 +373,12 @@ def save_training_artifacts(config: TianshouPPOConfig,
     metrics_payload = {"config": _serializable_config(config),
                        "artifact_run_name": artifact_run_name,
                        "settings_input": settings_payload,
+                       "checkpoint_path": checkpoint_path,
+                       "checkpoint_dir": checkpoint_dir,
                        "settings_path": settings_path,
                        "altitude_plot_path": altitude_plot_path,
+                       "best_episode_trace_path": best_episode_trace_path,
+                       "best_episode_trajectory_plot_path": best_episode_trajectory_plot_path,
                        "reward_plot_path": reward_plot_path,
                        "model_metrics_plot_path": model_metrics_plot_path,
                        "training_diagnostics_path": training_diagnostics_path,
@@ -310,22 +386,20 @@ def save_training_artifacts(config: TianshouPPOConfig,
     metrics_path.write_text(json.dumps(_json_safe(metrics_payload), indent=2),
                             encoding="utf-8")
 
-    checkpoint_payload = {
-        "config": asdict(config),
-        "settings_input": settings_payload,
-        "settings_path": str(settings_path),
-        "model_name": config.model_name,
-        "artifact_run_name": artifact_run_name,
-        "actor_state_dict": actor.state_dict(),
-        "critic_state_dict": critic.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "metrics": _json_safe(metrics),
-        "altitude_plot_path": str(altitude_plot_path),
-        "reward_plot_path": str(reward_plot_path) if reward_plot_path else None,
-        "model_metrics_plot_path": str(model_metrics_plot_path),
-        "training_diagnostics_path": str(training_diagnostics_path),
-    }
-    torch.save(checkpoint_payload, checkpoint_path)
+    _save_training_checkpoint(checkpoint_path=checkpoint_path,
+                              config=config,
+                              actor=actor,
+                              critic=critic,
+                              optimizer=optimizer,
+                              artifact_run_name=artifact_run_name,
+                              settings_path=settings_path,
+                              altitude_plot_path=altitude_plot_path,
+                              best_episode_trajectory_plot_path=best_episode_trajectory_plot_path,
+                              reward_plot_path=reward_plot_path,
+                              model_metrics_plot_path=model_metrics_plot_path,
+                              training_diagnostics_path=training_diagnostics_path,
+                              metrics=metrics,
+                              checkpoint_kind="final")
 
     log_payload = {"run_type": "training",
                    "model_name": config.model_name,
@@ -337,9 +411,12 @@ def save_training_artifacts(config: TianshouPPOConfig,
                    "artifacts": {
                        "metrics_path": metrics_path,
                        "checkpoint_path": checkpoint_path,
+                       "checkpoint_dir": checkpoint_dir,
                        "settings_path": settings_path,
                        "episode_altitudes_path": episode_altitudes_path,
+                       "best_episode_trace_path": best_episode_trace_path,
                        "altitude_plot_path": altitude_plot_path,
+                       "best_episode_trajectory_plot_path": best_episode_trajectory_plot_path,
                        "reward_plot_path": reward_plot_path,
                        "model_metrics_plot_path": model_metrics_plot_path,
                        "training_diagnostics_path": training_diagnostics_path,
@@ -350,15 +427,120 @@ def save_training_artifacts(config: TianshouPPOConfig,
 
     artifacts = TrainingArtifacts(metrics_path=str(metrics_path),
                                   checkpoint_path=str(checkpoint_path),
+                                  checkpoint_dir=str(checkpoint_dir),
                                   settings_path=str(settings_path),
                                   log_path=str(log_path),
                                   episode_altitudes_path=str(episode_altitudes_path),
+                                  best_episode_trace_path=str(best_episode_trace_path),
                                   altitude_plot_path=str(altitude_plot_path),
+                                  best_episode_trajectory_plot_path=str(best_episode_trajectory_plot_path),
                                   reward_plot_path=str(reward_plot_path) if reward_plot_path else None,
                                   model_metrics_plot_path=str(model_metrics_plot_path),
                                   training_diagnostics_path=str(training_diagnostics_path))
 
     return artifacts
+
+
+def _training_artifact_paths(config: TianshouPPOConfig,
+                             artifact_run_name: str) -> dict[str, Path]:
+    run_dir = Path(config.output_dir)
+    metrics_dir = run_dir / "metrics" / config.model_name
+    checkpoint_dir = run_dir / "checkpoints" / config.model_name / artifact_run_name
+    settings_dir = run_dir / "settings" / config.model_name
+    traces_dir = run_dir / "traces" / config.model_name
+    figures_dir = run_dir / "figures" / config.model_name / artifact_run_name
+
+    artifact_paths = {
+        "metrics_dir": metrics_dir,
+        "checkpoint_dir": checkpoint_dir,
+        "settings_dir": settings_dir,
+        "traces_dir": traces_dir,
+        "figures_dir": figures_dir,
+        "metrics_path": metrics_dir / f"{artifact_run_name}.json",
+        "checkpoint_path": checkpoint_dir / "final.pt",
+        "settings_path": settings_dir / f"{artifact_run_name}.json",
+        "episode_altitudes_path": (
+            traces_dir / f"{artifact_run_name}_episode_altitudes.json"
+        ),
+        "training_diagnostics_path": (
+            traces_dir / f"{artifact_run_name}_training_diagnostics.json"
+        ),
+        "best_episode_trace_path": (
+            traces_dir / f"{artifact_run_name}_best_episode_trace.json"
+        ),
+        "altitude_plot_path": figures_dir / "episode_altitudes.png",
+        "best_episode_trajectory_plot_path": figures_dir / "best_episode_trajectory.png",
+        "reward_plot_path": figures_dir / "reward_functions.png",
+        "model_metrics_plot_path": figures_dir / "model_metrics.png",
+    }
+
+    return artifact_paths
+
+
+def _ensure_artifact_dirs(artifact_paths: dict[str, Path]) -> None:
+    for key in ("metrics_dir",
+                "checkpoint_dir",
+                "settings_dir",
+                "traces_dir",
+                "figures_dir"):
+        artifact_paths[key].mkdir(parents=True, exist_ok=True)
+
+
+def _save_training_checkpoint(*,
+                              checkpoint_path: Path,
+                              config: TianshouPPOConfig,
+                              actor: nn.Module,
+                              critic: nn.Module,
+                              optimizer: torch.optim.Optimizer,
+                              artifact_run_name: str,
+                              settings_path: Path,
+                              altitude_plot_path: Path,
+                              best_episode_trajectory_plot_path: Path,
+                              reward_plot_path: Path | None,
+                              model_metrics_plot_path: Path,
+                              training_diagnostics_path: Path,
+                              metrics: dict,
+                              checkpoint_kind: str,
+                              epoch: int | None = None,
+                              env_step: int | None = None,
+                              gradient_step: int | None = None) -> None:
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_payload = {
+        "config": asdict(config),
+        "settings_input": _settings_payload(config),
+        "settings_path": str(settings_path),
+        "model_name": config.model_name,
+        "artifact_run_name": artifact_run_name,
+        "checkpoint_kind": checkpoint_kind,
+        "epoch": epoch,
+        "env_step": env_step,
+        "gradient_step": gradient_step,
+        "actor_state_dict": actor.state_dict(),
+        "critic_state_dict": critic.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "metrics": _json_safe(metrics),
+        "altitude_plot_path": str(altitude_plot_path),
+        "best_episode_trajectory_plot_path": str(best_episode_trajectory_plot_path),
+        "reward_plot_path": str(reward_plot_path) if reward_plot_path else None,
+        "model_metrics_plot_path": str(model_metrics_plot_path),
+        "training_diagnostics_path": str(training_diagnostics_path),
+    }
+    torch.save(checkpoint_payload, checkpoint_path)
+
+
+def _load_training_checkpoint(checkpoint_path: str | Path,
+                              *,
+                              actor: nn.Module,
+                              critic: nn.Module,
+                              optimizer: torch.optim.Optimizer) -> None:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+    actor.load_state_dict(checkpoint["actor_state_dict"])
+    critic.load_state_dict(checkpoint["critic_state_dict"])
+
+    optimizer_state = checkpoint.get("optimizer_state_dict")
+    if optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
 
 
 def _serializable_config(config: TianshouPPOConfig) -> dict:

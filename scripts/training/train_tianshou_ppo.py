@@ -78,6 +78,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name",
                         default=None,
                         help="File stem for saved metrics and checkpoint artifacts.")
+    parser.add_argument("--resume-checkpoint-path",
+                        default=None,
+                        help="Optional training checkpoint to resume actor, critic, and optimizer state from.")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--train-envs", type=int, default=None)
     parser.add_argument("--test-envs", type=int, default=None)
@@ -136,6 +139,7 @@ def _runtime_training_overrides(args: argparse.Namespace) -> dict:
         "entropy_coef",
         "output_dir",
         "run_name",
+        "resume_checkpoint_path",
     ]:
         arg_name = "model" if field_name == "model_name" else field_name
         value = getattr(args, arg_name)
