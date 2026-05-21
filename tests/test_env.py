@@ -3,7 +3,7 @@ from math import log
 import numpy as np
 import gymnasium as gym
 
-from rocket_env.env import EnvConfig, RocketAscentEnv
+from rocket_env.env import EnvConfig, FORCED_FULL_THROTTLE_STEPS, RocketAscentEnv
 from rocket_env.physics import PhysicsConfig, RocketState
 from rocket_env.rollouts import radial_thrust_policy, random_policy, run_episode
 
@@ -73,13 +73,15 @@ def test_default_rocket_has_realistic_single_stage_delta_v_budget():
     )
     final_mass = env.config.dry_mass + env.config.payload_mass
     exhaust_velocity = (
-        env.config.physics.max_thrust / env.config.physics.max_fuel_burn_rate
+        env.config.physics.max_thrust
+        * env.config.physics.vacuum_relative_efficiency
+        / env.config.physics.max_fuel_burn_rate
     )
     ideal_delta_v = exhaust_velocity * log(initial_mass / final_mass)
     final_thrust_to_weight = (
         env.config.physics.max_thrust / (final_mass * env.config.physics.g0)
     )
-    assert 4_000.0 <= ideal_delta_v <= 6_000.0
+    assert 7_950.0 <= ideal_delta_v <= 8_050.0
     assert final_thrust_to_weight <= 7.0
 
 
@@ -127,21 +129,23 @@ def test_crash_termination_when_altitude_below_ground():
     assert info["crashed"] is True
 
 
-def test_low_thrust_on_launch_pad_does_not_end_episode():
+def test_forced_launch_throttle_lifts_default_rocket():
     env = RocketAscentEnv()
     env.reset(seed=1)
     observation, _reward, terminated, truncated, info = env.step(
-        np.array([1.0, 0.0], dtype=np.float32)
+        np.array([-1.0, 0.0], dtype=np.float32)
     )
     assert terminated is False
     assert truncated is False
     assert info["crashed"] is False
-    assert info["altitude"] == 0.0
-    assert abs(info["vertical_speed"]) < 1e-9
+    assert info["altitude"] > 0.0
+    assert info["vertical_speed"] > 0.0
     assert info["fuel_used_ratio"] > 0.0
     assert info["fuel_used_ratio"] < 1.0
     np.testing.assert_allclose(info["fuel_used_ratio"],
                                info["fuel_used_mass"] / env.initial_fuel)
+    np.testing.assert_allclose(info["command_delta"], np.array([1.0, 0.0]))
+    np.testing.assert_allclose(info["applied_action"], np.array([1.0, 90.0]))
     assert observation["state"][6] == env.config.physics.dt
 
 
@@ -151,21 +155,30 @@ def test_reset_info_contains_sea_level_density():
     assert info["density"] == env.config.physics.rho0
 
 
-def test_one_percent_throttle_does_not_lift_default_rocket():
+def test_first_five_episode_steps_force_full_throttle():
     env = RocketAscentEnv()
     env.reset(seed=1)
-    _obs, _reward, terminated, truncated, info = env.step(
-        np.array([1.0, 0.0], dtype=np.float32)
+
+    for _step_index in range(FORCED_FULL_THROTTLE_STEPS):
+        _obs, _reward, terminated, truncated, info = env.step(
+            np.array([-1.0, 0.0], dtype=np.float32)
+        )
+        assert terminated is False
+        assert truncated is False
+        assert info["crashed"] is False
+        np.testing.assert_allclose(info["applied_action"],
+                                   np.array([1.0, 90.0]))
+
+    _obs, _reward, _terminated, _truncated, info = env.step(
+        np.array([-1.0, 0.0], dtype=np.float32)
     )
-    assert terminated is False
-    assert truncated is False
-    assert info["crashed"] is False
-    assert info["altitude"] == 0.0
+    np.testing.assert_allclose(info["applied_action"], np.array([0.5, 90.0]))
 
 
 def test_environment_applies_command_rate_limits():
     env = RocketAscentEnv()
     env.reset(seed=1)
+    env.step_count = FORCED_FULL_THROTTLE_STEPS
     _obs, _reward, _terminated, _truncated, info = env.step(
         np.array([1.0, -1.0], dtype=np.float32)
     )
@@ -188,6 +201,7 @@ def test_environment_command_rate_limits_scale_with_dt():
         )
     )
     env.reset(seed=1)
+    env.step_count = FORCED_FULL_THROTTLE_STEPS
     _obs, _reward, _terminated, _truncated, info = env.step(
         np.array([1.0, -1.0], dtype=np.float32)
     )
@@ -208,6 +222,7 @@ def test_environment_allows_angle_changes_after_launch_lock_altitude():
             time=0.0,
         )
     )
+    env.step_count = FORCED_FULL_THROTTLE_STEPS
 
     _obs, _reward, _terminated, _truncated, info = env.step(
         np.array([1.0, -1.0], dtype=np.float32)
@@ -226,6 +241,7 @@ def test_environment_allows_angle_changes_after_launch_lock_altitude():
 def test_low_throttle_rate_ramp_stays_on_launch_pad_without_crash():
     env = RocketAscentEnv(EnvConfig(throttle_change_per_second=0.01))
     env.reset(seed=1)
+    env.step_count = FORCED_FULL_THROTTLE_STEPS
     for _ in range(20):
         _obs, _reward, terminated, truncated, info = env.step(
             np.array([1.0, -1.0], dtype=np.float32)
@@ -239,6 +255,7 @@ def test_low_throttle_rate_ramp_stays_on_launch_pad_without_crash():
 def test_launch_pad_allows_gradual_throttle_until_liftoff():
     env = RocketAscentEnv(EnvConfig(throttle_change_per_second=0.01))
     env.reset(seed=1)
+    env.step_count = FORCED_FULL_THROTTLE_STEPS
 
     for _ in range(3):
         _obs, _reward, terminated, truncated, info = env.step(

@@ -22,7 +22,7 @@ class PhysicsSettings(BaseModel):
     sea_level_pressure: float = Field(default=101_325.0, gt=0.0)
     scale_height: float = Field(default=8_500.0, gt=0.0)
     max_thrust: float = Field(default=7_800_000.0, gt=0.0)
-    max_fuel_burn_rate: float = Field(default=2_350.0, ge=0.0)
+    max_fuel_burn_rate: float = Field(default=1_508.2420932599366, ge=0.0)
     sea_level_relative_efficiency: float = Field(default=1.0, gt=0.0, le=1.0)
     vacuum_relative_efficiency: float = Field(default=0.88, gt=0.0, le=1.0)
     max_thrust_angle: float = Field(default=3.141592653589793, gt=0.0)

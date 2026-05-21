@@ -6,7 +6,7 @@ physics:
   sea_level_pressure: 101325.0
   scale_height: 8500.0
   max_thrust: 7800000.0
-  max_fuel_burn_rate: 2350.0
+  max_fuel_burn_rate: 1508.2420932599366
   sea_level_relative_efficiency: 1.0
   vacuum_relative_efficiency: 0.88
   max_thrust_angle: 3.141592653589793
@@ -19,7 +19,7 @@ physics:
 environment:
   dry_mass: 110000.0
   payload_mass: 15000.0
-  initial_fuel: 550000.0
+  initial_fuel: 600000.0
   initial_altitude: 0.0
   target_altitude: 200000.0
   max_steps: 1000

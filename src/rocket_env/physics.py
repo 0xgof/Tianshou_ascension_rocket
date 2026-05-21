@@ -23,7 +23,7 @@ class PhysicsConfig:
     sea_level_pressure: float = 101_325.0
     scale_height: float = 8_500.0
     max_thrust: float = 7_800_000.0
-    max_fuel_burn_rate: float = 2_350.0
+    max_fuel_burn_rate: float = 1_508.2420932599366
     sea_level_relative_efficiency: float = 1.0
     vacuum_relative_efficiency: float = 0.88
     max_thrust_angle: float = pi

@@ -25,6 +25,7 @@ StepResult = tuple[Observation, float, bool, bool, Info]
 
 GROUND_CONTACT_TOLERANCE_M = 1e-6
 LAUNCH_ANGLE_LOCK_ALTITUDE_M = 10.0
+FORCED_FULL_THROTTLE_STEPS = 5
 
 
 class ResetOptions(TypedDict, total=False):
@@ -218,6 +219,9 @@ class RocketAscentEnv(gym.Env):
                                               0.0,
                                               1.0))
 
+        if self._full_throttle_forced():
+            self.throttle_command = 1.0
+
         if self._angle_change_allowed():
             self.angle_command = float(normalize_angle_degrees(
                 self.angle_command
@@ -232,6 +236,11 @@ class RocketAscentEnv(gym.Env):
                                  dtype=float)
 
         return command_delta
+
+    def _full_throttle_forced(self) -> bool:
+        force_full_throttle = self.step_count < FORCED_FULL_THROTTLE_STEPS
+
+        return force_full_throttle
 
     def _angle_change_allowed(self) -> bool:
         if self.state is None:

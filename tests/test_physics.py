@@ -87,7 +87,7 @@ def test_default_engine_specific_impulse_is_plausible():
     isp = DEFAULT_CONFIG.max_thrust / (
         DEFAULT_CONFIG.max_fuel_burn_rate * DEFAULT_CONFIG.g0
     )
-    assert 300.0 <= isp <= 370.0
+    assert 500.0 <= isp <= 550.0
 
 
 def test_ambient_pressure_decreases_with_altitude():
